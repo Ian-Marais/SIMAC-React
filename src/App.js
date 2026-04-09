@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import {
   Avatar,
@@ -14,6 +14,8 @@ import {
 } from '@mui/material';
 import { Doughnut } from 'react-chartjs-2';
 import { Chart as ChartJS, ArcElement, Tooltip } from 'chart.js';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import './simac.css';
 
 ChartJS.register(ArcElement, Tooltip);
@@ -27,7 +29,7 @@ const LANGUAGE_OPTIONS = [
 ];
 
 const NAV_ITEMS = [
-  { key: 'nav.home', fallback: 'Home', icon: 'bi-house' },
+  { key: 'nav.home', fallback: 'Home', icon: 'bi-house', path: '/' },
   { key: 'nav.alerts', fallback: 'Alerts', icon: 'bi-bell', sub: ['nav.alerts.active', 'nav.alerts.history'] },
   { key: 'nav.machines', fallback: 'Machines', icon: 'bi-truck' },
   { key: 'nav.machine_groups', fallback: 'Machine Groups', icon: 'bi-grid' },
@@ -36,7 +38,7 @@ const NAV_ITEMS = [
   { key: 'nav.dashboards', fallback: 'Dashboards', icon: 'bi-layout-sidebar' },
   { key: 'nav.users', fallback: 'Users', icon: 'bi-people', path: '/users' },
   { key: 'nav.organizations', fallback: 'Organizations', icon: 'bi-building' },
-  { key: 'nav.sitelayout', fallback: 'SiteLayout', icon: 'bi-map' },
+  { key: 'nav.map', fallback: 'Map', icon: 'bi-map', path: '/map' },
   { key: 'nav.tags', fallback: 'Tags', icon: 'bi-tags' },
 ];
 
@@ -44,6 +46,7 @@ const ORGANIZATIONS = [
   { name: 'Afrihost', src: 'https://nerospec.app/images/operation/14/20220326191113808_QuOAecbpkaIcfRsNN.png' },
   { name: 'ArcelorMittal', src: 'https://nerospec.app/images/operation/100/20231025035010238_5lIHLDplQ3iCjw3bs.png' },
   { name: 'Black Rock', src: 'https://nerospec.app/images/operation/18/20210525134504567_WChSDLPrwiMnVVIgJ.png' },
+  { name: 'Connected Sensors', src: 'https://nerospec.app/images/operation/24/20220326174106926_geqGCxulRSowzI3Fl.png' },
   { name: 'Glencore - Kroondal', src: 'https://nerospec.app/images/operation/17/20210525134628841_HxgIJHOwLydqSfMz9.png' },
   { name: 'Gold Fields - South Deep', src: 'https://nerospec.app/images/operation/80/20220511071745219_F1JznvUbGJhvfdq3m.png' },
   { name: 'Harmony - Mponeng', src: 'https://nerospec.app/images/operation/151/2024100212303560_7s6JLhKHgJyqte0K2.png' },
@@ -72,6 +75,73 @@ const DEFAULT_MESSAGES = [
   { title: 'Geofence Exit', info: 'Drill-19', time: '2026-02-28 23:04' },
   { title: 'Maintenance Due', info: 'Fire Truck-03', time: '2026-02-28 18:27' },
 ];
+
+const DEVICE_REGIONS = [
+  { name: 'North America', lat: 39.8283, lng: -98.5795, latSpread: 10, lngSpread: 18 },
+  { name: 'Greenland', lat: 71.7069, lng: -42.6043, latSpread: 7, lngSpread: 8 },
+  { name: 'Atlantic', lat: 38.7223, lng: -28.1397, latSpread: 7, lngSpread: 10 },
+  { name: 'South America', lat: -14.235, lng: -51.9253, latSpread: 14, lngSpread: 12 },
+  { name: 'West Africa', lat: 6.5244, lng: 3.3792, latSpread: 9, lngSpread: 11 },
+  { name: 'Southern Africa', lat: -26.2041, lng: 28.0473, latSpread: 8, lngSpread: 9 },
+  { name: 'Indian Ocean', lat: -22.9576, lng: 43.5974, latSpread: 10, lngSpread: 10 },
+  { name: 'Central Asia', lat: 43.222, lng: 76.8512, latSpread: 8, lngSpread: 15 },
+  { name: 'Antarctica', lat: -77.8419, lng: 166.6863, latSpread: 3, lngSpread: 12 },
+];
+
+const DEVICE_STATUSES = {
+  online: { label: 'Online', accent: '#1d4ed8' },
+  idle: { label: 'Idle', accent: '#2563eb' },
+  alert: { label: 'Alert', accent: '#0f3f9e' },
+};
+
+function createSeededRandom(seed = '') {
+  let value = 0;
+  for (let index = 0; index < seed.length; index += 1) {
+    value = (value * 31 + seed.charCodeAt(index)) >>> 0;
+  }
+  if (value === 0) value = 0x12345678;
+  return () => {
+    value = (value * 1664525 + 1013904223) >>> 0;
+    return value / 4294967296;
+  };
+}
+
+function isConnectedSensors(orgName) {
+  return orgName === 'Connected Sensors';
+}
+
+function buildDeviceLocations(orgName) {
+  const random = createSeededRandom(orgName);
+  const statuses = Object.keys(DEVICE_STATUSES);
+
+  return Array.from({ length: 10 }, (_, index) => {
+    const region = DEVICE_REGIONS[index % DEVICE_REGIONS.length];
+    const latOffset = (random() - 0.5) * region.latSpread;
+    const lngOffset = (random() - 0.5) * region.lngSpread;
+    const status = statuses[Math.floor(random() * statuses.length)];
+
+    return {
+      id: `${orgName.slice(0, 3).toUpperCase()}-${String(index + 1).padStart(3, '0')}`,
+      name: `Device ${String(index + 1).padStart(2, '0')}`,
+      status,
+      region: region.name,
+      battery: `${Math.max(41, Math.round(48 + random() * 50))}%`,
+      lat: Number((region.lat + latOffset).toFixed(4)),
+      lng: Number((region.lng + lngOffset).toFixed(4)),
+      lastSeen: `${Math.max(1, Math.round(random() * 18))} min ago`,
+    };
+  });
+}
+
+function createDevicePinIcon(status) {
+  return L.divIcon({
+    className: 'device-map-marker',
+    html: `<span class="device-map-pin device-map-pin--${status}"></span>`,
+    iconSize: [20, 20],
+    iconAnchor: [10, 20],
+    popupAnchor: [0, -18],
+  });
+}
 
 function getInitials(name = '') {
   return name
@@ -117,11 +187,19 @@ function AppShell({ children, appState, setAppState, t }) {
   }, [location.pathname]);
 
   const selectedOrg = useMemo(
-    () => ORGANIZATIONS.find((o) => o.name === appState.selectedOrg) || ORGANIZATIONS[4],
+    () => ORGANIZATIONS.find((o) => o.name === appState.selectedOrg)
+      || ORGANIZATIONS.find((o) => o.name === 'Gold Fields - South Deep')
+      || ORGANIZATIONS[0],
     [appState.selectedOrg],
   );
 
   const filteredOrgs = ORGANIZATIONS.filter((o) => o.name.toLowerCase().includes(orgSearch.toLowerCase()));
+  const navLabelFor = (item) => {
+    if (item.key === 'nav.machines' && isConnectedSensors(selectedOrg.name)) {
+      return t('nav.devices', 'Devices');
+    }
+    return t(item.key, item.fallback);
+  };
 
   const setLocal = (patch) => {
     const next = { ...appState, ...patch };
@@ -165,7 +243,7 @@ function AppShell({ children, appState, setAppState, t }) {
                   <span className="icon">
                     <i className={`bi ${item.icon}`} aria-hidden="true" />
                   </span>
-                  <span className="label">{t(item.key, item.fallback)}</span>
+                  <span className="label">{navLabelFor(item)}</span>
                   {hasSub && (
                     <>
                       <span className="caret" aria-hidden="true">▸</span>
@@ -487,6 +565,95 @@ function DashboardPage({ appState, setAppState, t }) {
   );
 }
 
+function MapPage({ appState, t }) {
+  const mapRef = useRef(null);
+  const deviceLocations = useMemo(() => buildDeviceLocations(appState.selectedOrg), [appState.selectedOrg]);
+  const statusSummary = useMemo(() => {
+    return deviceLocations.reduce((summary, device) => {
+      summary[device.status] += 1;
+      return summary;
+    }, { online: 0, idle: 0, alert: 0 });
+  }, [deviceLocations]);
+
+  useEffect(() => {
+    if (!mapRef.current) return undefined;
+
+    const map = L.map(mapRef.current, {
+      zoomControl: true,
+      minZoom: 2,
+      maxZoom: 6,
+      worldCopyJump: true,
+    }).setView([14, 12], 2);
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+      subdomains: 'abcd',
+    }).addTo(map);
+
+    const bounds = [];
+    deviceLocations.forEach((device) => {
+      bounds.push([device.lat, device.lng]);
+      L.marker([device.lat, device.lng], { icon: createDevicePinIcon(device.status) })
+        .addTo(map)
+        .bindPopup(`
+          <div class="device-map-popup">
+            <strong>${device.name}</strong>
+            <span>${device.id}</span>
+            <span>${DEVICE_STATUSES[device.status].label} • ${device.region}</span>
+            <span>Battery ${device.battery} • Last seen ${device.lastSeen}</span>
+          </div>
+        `);
+    });
+
+    if (bounds.length) {
+      map.fitBounds(bounds, { padding: [36, 36], maxZoom: 3 });
+    }
+
+    return () => {
+      map.remove();
+    };
+  }, [deviceLocations]);
+
+  return (
+    <section className="content map-content">
+      <div className="backdrop">
+        <div className="panel device-map-shell">
+          <div className="device-map-header">
+            <div>
+              <div className="device-map-kicker">{t('nav.map', 'Map')}</div>
+              <h1 className="device-map-title">{appState.selectedOrg}</h1>
+              <p className="device-map-subtitle">Randomized device positions for the selected organization using a global Leaflet view.</p>
+            </div>
+            <div className="device-map-summary">
+              <div className="device-map-stat">
+                <span className="device-map-stat-value">{deviceLocations.length}</span>
+                <span className="device-map-stat-label">Devices</span>
+              </div>
+              <div className="device-map-stat">
+                <span className="device-map-stat-value">{statusSummary.online}</span>
+                <span className="device-map-stat-label">Online</span>
+              </div>
+              <div className="device-map-stat">
+                <span className="device-map-stat-value">{statusSummary.alert}</span>
+                <span className="device-map-stat-label">Alerts</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="device-map-card">
+            <div className="device-map-toolbar">
+              <span className="device-map-chip device-map-chip--online">Online {statusSummary.online}</span>
+              <span className="device-map-chip device-map-chip--idle">Idle {statusSummary.idle}</span>
+              <span className="device-map-chip device-map-chip--alert">Alert {statusSummary.alert}</span>
+            </div>
+            <div ref={mapRef} className="device-map-canvas" aria-label="Device map" />
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function LoginPage({ t, setAppState }) {
   const navigate = useNavigate();
   const [identifier, setIdentifier] = useState('');
@@ -781,6 +948,16 @@ function AppRoutes() {
             <ProtectedRoute appState={appState}>
               <AppShell appState={appState} setAppState={setAppState} t={t}>
                 <UsersPage />
+              </AppShell>
+            </ProtectedRoute>
+          )}
+        />
+        <Route
+          path="/map"
+          element={(
+            <ProtectedRoute appState={appState}>
+              <AppShell appState={appState} setAppState={setAppState} t={t}>
+                <MapPage appState={appState} t={t} />
               </AppShell>
             </ProtectedRoute>
           )}
